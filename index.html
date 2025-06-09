@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Open-World Game</title>
+    <style>
+        /* Basic CSS to ensure the canvas fills the entire page */
+        body {
+            margin: 0;
+            overflow: hidden; /* Hide scrollbars */
+            font-family: sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        /* Style for the instructions overlay */
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 8px;
+            font-size: 16px;
+            text-align: center;
+            z-index: 10;
+        }
+         /* Style for the crosshair in the center of the screen */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 4px;
+            height: 4px;
+            background-color: white;
+            border-radius: 50%;
+            border: 1px solid black;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            display: none; /* Initially hidden until pointer lock */
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #blocker-content {
+            text-align: center;
+            color: white;
+        }
+        /* UI for weapon and ammo */
+        #weapon-ui {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            padding: 15px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 8px;
+            font-size: 20px;
+            text-align: right;
+            z-index: 10;
+            min-width: 150px;
+        }
+        #weapon-name {
+            font-weight: bold;
+            font-size: 24px;
+        }
+        #weapon-ammo {
+            font-family: 'Courier New', Courier, monospace;
+        }
+        /* UI for player health and AI count */
+        #game-status-ui {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            padding: 15px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 8px;
+            font-size: 20px;
+            z-index: 10;
+        }
+        #game-over-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 30px;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            border-radius: 15px;
+            font-size: 48px;
+            font-weight: bold;
+            text-align: center;
+            z-index: 100;
+            display: none;
+        }
+        /* New UI for Minimap and Storm */
+        #minimap-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 200px;
+            height: 200px;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 50%;
+        }
+        #minimap {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+        }
+        #storm-timer-ui {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 15px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 8px;
+            font-size: 20px;
+            text-align: center;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div id="blocker">
+        <div id="blocker-content">
+            <h2>Click to Play</h2>
+            <p>(W, A, S, D or Arrow Keys = Move, SHIFT / SPACE = Jump, E = Sprint, MOUSE = Look)</p>
+            <p>(LEFT CLICK = Shoot/Interact, R = Reload, 1-3 = Switch Weapon)</p>
+        </div>
+    </div>
+    
+    <div id="minimap-container">
+        <canvas id="minimap"></canvas>
+    </div>
+
+    <!-- Crosshair element -->
+    <div id="crosshair"></div>
+
+    <!-- Weapon UI -->
+    <div id="weapon-ui">
+        <div id="weapon-name">Unarmed</div>
+        <div id="weapon-ammo">--</div>
+    </div>
+    
+    <!-- Game Status UI -->
+    <div id="game-status-ui">
+        <div id="player-health">Health: 100</div>
+        <div id="ai-count">Bots Remaining: 5</div>
+    </div>
+    
+    <!-- Storm Timer UI -->
+    <div id="storm-timer-ui">
+        Storm shrinking in: --
+    </div>
+
+    <!-- Game Over Message -->
+    <div id="game-over-message"></div>
+
+    <!-- The core of the game is the Three.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        //
+        // CORE GAME SETUP
+        //
+        let scene, camera, renderer, player, raycaster;
+        let ground, clock;
+        let playerVelocity = new THREE.Vector3();
+        let playerHealth = 100;
+        
+        const playerSpeed = 11.0;
+        const playerSprintSpeed = 22.0;
+        const playerJumpHeight = 9.0; 
+        const gravity = -98.0; 
+        let isGrounded = false;
+        
+        const keysPressed = {};
+        const crates = [];
+        let isReloading = false;
+        let gameOver = false;
+        let gameStarted = false;
+        
+        // Weapon & Inventory System
+        const playerInventory = [null, null, null];
+        let currentWeaponIndex = -1;
+        let playerWeapon = { name: 'Unarmed', ammoInMag: 0, ammoInReserve: 0, magSize: 0, fireRate: 0, lastShotTime: 0, damage: 0, range: 0 };
+        let weaponModels = {};
+
+        // AI & Collision System
+        const aiBots = [];
+        let shootableTargets = [];
+        let worldColliders = [];
+
+        // Minimap
+        let minimap, minimapCtx;
+        const mapSize = 940; // Map is 25% larger
+
+        // Storm System
+        let storm;
+        let stormPhase = 0;
+        let stormWaitTime = 60; // 60 seconds until first shrink
+        let stormShrinkTime = 90; // 90 seconds to shrink
+        let stormTimer = stormWaitTime;
+        let stormIsShrinking = false;
+
+
+        // Initialize the game
+        init();
+
+        function init() {
+            clock = new THREE.Clock();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            // Player is now just a camera container
+            createPlayer();
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(100, 100, 50);
+            scene.add(directionalLight);
+
+            const groundGeometry = new THREE.PlaneGeometry(mapSize, mapSize);
+            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x006400 });
+            ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            scene.add(ground);
+            worldColliders.push(ground);
+
+            raycaster = new THREE.Raycaster();
+
+            // Setup Minimap
+            minimap = document.getElementById('minimap');
+            minimap.width = 200;
+            minimap.height = 200;
+            minimapCtx = minimap.getContext('2d');
+
+            createScenery(mapSize);
+            createCrates(mapSize);
+            createBorderWalls(mapSize);
+            createAIBots(5);
+            // Storm is now set up after game starts
+
+            setupPointerLock();
+            setupEventListeners();
+
+            animate();
+        }
+
+        function createPlayer() {
+            player = new THREE.Object3D(); // Player is now an invisible container
+            player.add(camera);
+            
+            // Position weapon models relative to the camera for FPS view
+            const hand = new THREE.Object3D();
+            hand.position.set(0.5, -0.4, -1);
+            camera.add(hand);
+
+            weaponModels.Pistol = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, 0.4), new THREE.MeshBasicMaterial({ color: 0x444444 }));
+            weaponModels.Rifle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, 1.2), new THREE.MeshBasicMaterial({ color: 0x333333 }));
+            weaponModels.Bow = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.5), new THREE.MeshBasicMaterial({ color: 0x8B4513 }));
+            for (const key in weaponModels) { weaponModels[key].visible = false; hand.add(weaponModels[key]); }
+            
+            const spawnArea = mapSize * 0.8;
+            player.position.set((Math.random() - 0.5) * spawnArea, 10, (Math.random() - 0.5) * spawnArea);
+            player.userData = { isPlayer: true, isTarget: true }; // Targetable by AI
+            scene.add(player);
+            shootableTargets.push(player);
+        }
+
+        function createScenery(mapSize) {
+            const numberOfTrees = 400; 
+            const spawnArea = mapSize - 50;
+            const brownMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }), greenMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 }), darkGreenMaterial = new THREE.MeshLambertMaterial({ color: 0x006400 });
+            const gridCells = Math.ceil(Math.sqrt(numberOfTrees)), cellSize = spawnArea / gridCells; let treesPlaced = 0;
+            for (let i = 0; i < gridCells; i++) {
+                for (let j = 0; j < gridCells; j++) {
+                    if (treesPlaced >= numberOfTrees) break;
+                    const treeType = Math.floor(Math.random() * 3);
+                    const trunkHeight = Math.random() * 8 + 10;
+                    const trunkWidth = Math.random() * 1.5 + 2; // Thicker trees
+                    let trunk = new THREE.Mesh(new THREE.BoxGeometry(trunkWidth, trunkHeight, trunkWidth), brownMaterial);
+                    switch(treeType) {
+                        case 0: leaves = new THREE.Mesh(new THREE.BoxGeometry(Math.random() * 4 + 6, Math.random() * 4 + 6, Math.random() * 4 + 6), greenMaterial); leaves.position.y = trunkHeight / 2; break;
+                        case 1: leaves = new THREE.Mesh(new THREE.SphereGeometry(Math.random() * 3 + 4, 8, 6), greenMaterial); leaves.position.y = trunkHeight / 2; break;
+                        case 2: const coneHeight = Math.random() * 6 + 7; leaves = new THREE.Mesh(new THREE.ConeGeometry(Math.random() * 2 + 3, coneHeight, 8), darkGreenMaterial); leaves.position.y = trunkHeight / 2 + coneHeight / 2 - 1; break;
+                    }
+                    trunk.add(leaves);
+                    const treeX = (i * cellSize - spawnArea / 2) + Math.random() * cellSize, treeZ = (j * cellSize - spawnArea / 2) + Math.random() * cellSize;
+                    trunk.position.set(treeX, trunkHeight / 2, treeZ); 
+                    scene.add(trunk); 
+                    worldColliders.push(trunk);
+                    treesPlaced++;
+                } if (treesPlaced >= numberOfTrees) break;
+            }
+        }
+        
+        function createCrates(mapSize) {
+            const numberOfCrates = Math.floor(Math.random() * 4) + 12; // 12-15 crates
+            const crateGeo = new THREE.BoxGeometry(2, 2, 2); 
+            const crateMat = new THREE.MeshLambertMaterial({ color: 0xFFD700 }); // Gold color
+            for (let i = 0; i < numberOfCrates; i++) { 
+                const crate = new THREE.Mesh(crateGeo, crateMat);
+                // Spawn near a random tree
+                const randomTree = worldColliders[Math.floor(Math.random() * (worldColliders.length - 5)) + 1]; // Avoid walls
+                const offsetX = (Math.random() - 0.5) * 10;
+                const offsetZ = (Math.random() - 0.5) * 10;
+                crate.position.set(randomTree.position.x + offsetX, 1, randomTree.position.z + offsetZ);
+                crates.push(crate); scene.add(crate); 
+            }
+        }
+
+        function createBorderWalls(mapSize) {
+            const wallHeight = 50; const wallThickness = 10;
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x444444 });
+            const halfMap = mapSize / 2;
+            const wallN = new THREE.Mesh(new THREE.BoxGeometry(mapSize + wallThickness, wallHeight, wallThickness), wallMaterial); wallN.position.set(0, wallHeight/2, -halfMap); scene.add(wallN);
+            const wallS = new THREE.Mesh(new THREE.BoxGeometry(mapSize + wallThickness, wallHeight, wallThickness), wallMaterial); wallS.position.set(0, wallHeight/2, halfMap); scene.add(wallS);
+            const wallE = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, wallHeight, mapSize + wallThickness), wallMaterial); wallE.position.set(halfMap, wallHeight/2, 0); scene.add(wallE);
+            const wallW = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, wallHeight, mapSize + wallThickness), wallMaterial); wallW.position.set(-halfMap, wallHeight/2, 0); scene.add(wallW);
+            worldColliders.push(wallN, wallS, wallE, wallW);
+        }
+
+        function createAIBots(count) {
+            for(let i = 0; i < count; i++) {
+                const aiGroup = new THREE.Group();
+                const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.5), new THREE.MeshLambertMaterial({ color: 0xaa0000 })); body.position.y = 0.75; aiGroup.add(body);
+                const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), new THREE.MeshLambertMaterial({ color: 0x886622 })); head.position.y = 1.9; aiGroup.add(head);
+
+                const spawnArea = mapSize * 0.8;
+                aiGroup.position.set((Math.random() - 0.5) * spawnArea, 10, (Math.random() - 0.5) * spawnArea);
+                aiGroup.userData = { isTarget: true };
+                
+                const bot = { id: aiGroup.uuid, model: aiGroup, health: 100, weapon: null, state: 'SEEKING_CRATE', targetCrate: null, currentTarget: null, stateTimer: 0, shootTimer: Math.random() * 3 + 2, velocity: new THREE.Vector3() };
+                aiBots.push(bot); scene.add(aiGroup); shootableTargets.push(aiGroup);
+            }
+        }
+        
+        function setupStorm() {
+            const stormMaterial = new THREE.MeshBasicMaterial({
+                color: 0x6a0dad,
+                transparent: true,
+                opacity: 0.35, // More visible
+                side: THREE.DoubleSide
+            });
+            const stormRadius = mapSize * 1.5; // Start huge
+            const stormHeight = 200;
+            storm = {
+                mesh: new THREE.Mesh(new THREE.CylinderGeometry(stormRadius, stormRadius, stormHeight, 64, 1, true), stormMaterial),
+                center: new THREE.Vector2(0, 0),
+                currentRadius: stormRadius,
+                targetRadius: stormRadius * 0.7,
+                damage: 2 // damage per second
+            };
+            storm.mesh.position.y = stormHeight / 2;
+            scene.add(storm.mesh);
+        }
+
+        function setupPointerLock() {
+            const blocker = document.getElementById('blocker'), crosshair = document.getElementById('crosshair');
+            blocker.addEventListener('click', () => { 
+                if(!gameOver) {
+                    document.body.requestPointerLock().catch(e => console.warn("Could not request pointer lock:", e));
+                    if (!gameStarted) {
+                        gameStarted = true;
+                        setupStorm(); // Start the storm on first click
+                    }
+                }
+            });
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === document.body) { blocker.style.display = 'none'; crosshair.style.display = 'block'; document.addEventListener('mousemove', onMouseMove); }
+                else { crosshair.style.display = 'none'; document.removeEventListener('mousemove', onMouseMove); for (let key in keysPressed) { keysPressed[key] = false; } playerVelocity.set(0, 0, 0); blocker.style.display = 'flex'; }
+            });
+        }
+        
+        function setupEventListeners() {
+            document.addEventListener('keydown', (event) => { 
+                const key = event.key.toLowerCase(); keysPressed[key] = true; 
+                if (key === 'r') reload(); if (['1', '2', '3'].includes(key)) { switchWeapon(parseInt(key) - 1); }
+            });
+            document.addEventListener('keyup', (event) => { keysPressed[event.key.toLowerCase()] = false; });
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('mousedown', onMouseDown);
+        }
+
+        function onMouseMove(event) {
+            if (document.pointerLockElement === document.body) {
+                player.rotation.y -= event.movementX * 0.002;
+                camera.rotation.x -= event.movementY * 0.002;
+                camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+            }
+        }
+
+        function onMouseDown(event) {
+            if (document.pointerLockElement !== document.body || event.button !== 0) return;
+            raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+            const crateIntersects = raycaster.intersectObjects(crates);
+            if (crateIntersects.length > 0 && crateIntersects[0].distance < 10) { pickupWeaponFromCrate(crateIntersects[0].object); return; }
+            shoot();
+        }
+
+        function pickupWeaponFromCrate(crate) {
+            scene.remove(crate); crates.splice(crates.indexOf(crate), 1);
+            
+            const weaponRoll = Math.random();
+            let newWeapon;
+            if (weaponRoll < 0.33) newWeapon = { name: 'Bow', ammoInMag: 1, ammoInReserve: Infinity, magSize: 1, fireRate: 1000, lastShotTime: 0, damage: 10, range: 250 };
+            else if (weaponRoll < 0.66) newWeapon = { name: 'Rifle', ammoInMag: 30, ammoInReserve: 60, magSize: 30, fireRate: 150, lastShotTime: 0, damage: 18, range: 400 };
+            else newWeapon = { name: 'Pistol', ammoInMag: 12, ammoInReserve: 36, magSize: 12, fireRate: 300, lastShotTime: 0, damage: 13, range: 150 };
+
+            const existingWeaponIndex = playerInventory.findIndex(w => w && w.name === newWeapon.name);
+            if(existingWeaponIndex !== -1) {
+                playerInventory[existingWeaponIndex].ammoInReserve += newWeapon.ammoInReserve;
+            } else {
+                 const emptySlotIndex = playerInventory.findIndex(slot => slot === null);
+                if (emptySlotIndex !== -1) {
+                    playerInventory[emptySlotIndex] = newWeapon;
+                     if (currentWeaponIndex === -1) switchWeapon(emptySlotIndex);
+                }
+            }
+            updateWeaponUI();
+        }
+        
+        function switchWeapon(index) {
+            if (index < 0 || index >= playerInventory.length || !playerInventory[index] || index === currentWeaponIndex) return;
+            currentWeaponIndex = index;
+            playerWeapon = playerInventory[index];
+            for (const key in weaponModels) { weaponModels[key].visible = (key === playerWeapon.name); }
+            updateWeaponUI();
+        }
+
+        function shoot() {
+            const now = Date.now();
+            if (isReloading || now - playerWeapon.lastShotTime < playerWeapon.fireRate || playerWeapon.name === 'Unarmed') return;
+
+            if (playerWeapon.ammoInMag > 0) {
+                playerWeapon.ammoInMag--; playerWeapon.lastShotTime = now;
+                raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+                raycaster.far = playerWeapon.range;
+
+                const intersects = raycaster.intersectObjects([...shootableTargets, ...worldColliders], true);
+                if (intersects.length > 0) {
+                    let hitObject = intersects[0].object; let hitPoint = intersects[0].point;
+                    let targetBot = null; let parent = hitObject;
+                    while(parent) {
+                        const foundBot = aiBots.find(b => b.model === parent);
+                        if(foundBot) { targetBot = foundBot; break; }
+                        parent = parent.parent;
+                    }
+                    if (targetBot) targetBot.health -= playerWeapon.damage;
+                    createImpactEffect(hitPoint);
+                }
+                if (playerWeapon.name === 'Bow') setTimeout(() => { playerWeapon.ammoInMag = 1; updateWeaponUI(); }, playerWeapon.fireRate);
+            } else if(playerWeapon.ammoInReserve > 0) reload();
+            updateWeaponUI();
+        }
+
+        function createImpactEffect(position) { const impact = new THREE.Mesh(new THREE.SphereGeometry(0.1), new THREE.MeshBasicMaterial({ color: 0xffff00 })); impact.position.copy(position); scene.add(impact); setTimeout(() => scene.remove(impact), 100); }
+
+        function reload() {
+             if (isReloading || playerWeapon.name === 'Unarmed' || playerWeapon.name === 'Bow' || playerWeapon.ammoInMag === playerWeapon.magSize || playerWeapon.ammoInReserve === 0) return;
+            isReloading = true; document.getElementById('weapon-ammo').innerText = 'Reloading...';
+            setTimeout(() => {
+                const ammoNeeded = playerWeapon.magSize - playerWeapon.ammoInMag; const ammoToMove = Math.min(ammoNeeded, playerWeapon.ammoInReserve);
+                playerWeapon.ammoInMag += ammoToMove; playerWeapon.ammoInReserve -= ammoToMove;
+                isReloading = false; updateWeaponUI();
+            }, 1500);
+        }
+        
+        function updateWeaponUI() { const nameEl = document.getElementById('weapon-name'), ammoEl = document.getElementById('weapon-ammo'); nameEl.innerText = playerWeapon.name; if (playerWeapon.name === 'Bow') ammoEl.innerText = '∞'; else if (playerWeapon.name !== 'Unarmed') ammoEl.innerText = `${playerWeapon.ammoInMag} / ${playerWeapon.ammoInReserve}`; else ammoEl.innerText = '--'; }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            if (gameOver) return;
+            if (document.pointerLockElement === document.body) {
+                updatePlayer(delta);
+                updateAIBots(delta);
+            }
+            if (gameStarted) {
+                updateStorm(delta);
+                updateMinimap();
+            }
+            renderer.render(scene, camera);
+        }
+        
+        function updatePlayer(delta) {
+            const currentSpeed = (keysPressed['e'] ? playerSprintSpeed : playerSpeed) * delta;
+            const playerHeight = 1.8; 
+            const moveDirection = new THREE.Vector3();
+            
+            // Corrected strafing logic for first-person
+            const forward = new THREE.Vector3();
+            player.getWorldDirection(forward);
+            const right = new THREE.Vector3().crossVectors(player.up, forward);
+
+            if (keysPressed['w'] || keysPressed['arrowup']) moveDirection.add(forward);
+            if (keysPressed['s'] || keysPressed['arrowdown']) moveDirection.sub(forward);
+            if (keysPressed['a'] || keysPressed['arrowleft']) moveDirection.sub(right);
+            if (keysPressed['d'] || keysPressed['arrowright']) moveDirection.add(right);
+
+            if (moveDirection.length() > 0) { moveDirection.normalize(); player.position.add(moveDirection.multiplyScalar(currentSpeed)); }
+
+            playerVelocity.y += gravity * delta; 
+            player.position.y += playerVelocity.y * delta;
+            if (player.position.y < playerHeight) { playerVelocity.y = 0; player.position.y = playerHeight; isGrounded = true; } else { isGrounded = false; }
+            if (isGrounded && (keysPressed['shift'] || keysPressed[' '])) { playerVelocity.y = Math.sqrt(playerJumpHeight * -2 * gravity); }
+        }
+
+        function updateAIBots(delta) {
+            for (let i = aiBots.length - 1; i >= 0; i--) {
+                const bot = aiBots[i];
+                if (bot.health <= 0) {
+                    scene.remove(bot.model); shootableTargets = shootableTargets.filter(t => t !== bot.model);
+                    aiBots.splice(i, 1);
+                    document.getElementById('ai-count').innerText = `Bots Remaining: ${aiBots.length}`;
+                    if(aiBots.length === 0 && playerHealth > 0) triggerGameOver(true);
+                    continue;
+                }
+
+                bot.stateTimer -= delta; bot.shootTimer -= delta;
+                if (bot.stateTimer <= 0) {
+                    if (!bot.weapon) bot.state = 'SEEKING_CRATE'; else findNewAITarget(bot);
+                    bot.stateTimer = Math.random() * 4 + 3;
+                }
+                
+                if (bot.state === 'SEEKING_CRATE') {
+                    if(!bot.targetCrate || !crates.includes(bot.targetCrate)) bot.targetCrate = findNearestCrate(bot);
+                    if(bot.targetCrate) {
+                        const direction = new THREE.Vector3().subVectors(bot.targetCrate.position, bot.model.position);
+                        if(direction.length() < 2) {
+                            const weaponRoll = Math.random();
+                            if (weaponRoll < 0.33) bot.weapon = { name: 'Bow', damage: 10 }; else if (weaponRoll < 0.66) bot.weapon = { name: 'Rifle', damage: 18 }; else bot.weapon = { name: 'Pistol', damage: 13 };
+                            scene.remove(bot.targetCrate); crates.splice(crates.indexOf(bot.targetCrate), 1);
+                            bot.targetCrate = null; bot.state = 'HUNTING';
+                        } else {
+                            direction.y = 0; direction.normalize(); bot.model.position.add(direction.multiplyScalar(playerSpeed * 0.7 * delta));
+                            bot.model.quaternion.slerp(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction), 0.1);
+                        }
+                    } else { bot.state = 'WANDERING'; }
+                } else if (bot.state === 'WANDERING') {
+                    if(!bot.targetPosition || bot.model.position.distanceTo(bot.targetPosition) < 5) {
+                         const wanderArea = mapSize * 0.9;
+                         bot.targetPosition = new THREE.Vector3((Math.random() - 0.5) * wanderArea, 0, (Math.random() - 0.5) * wanderArea);
+                    }
+                     const direction = new THREE.Vector3().subVectors(bot.targetPosition, bot.model.position);
+                     direction.y = 0; direction.normalize(); bot.model.position.add(direction.multiplyScalar(playerSpeed * 0.5 * delta));
+                     bot.model.quaternion.slerp(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction), 0.1);
+
+                } else if (bot.state === 'HUNTING' && bot.currentTarget) {
+                    const targetDirection = new THREE.Vector3().subVectors(bot.currentTarget.position, bot.model.position);
+                    const distanceToTarget = targetDirection.length();
+                    targetDirection.y = 0; targetDirection.normalize();
+                    if(distanceToTarget > 60) bot.model.position.add(targetDirection.multiplyScalar(playerSpeed * 0.6 * delta));
+                    bot.model.quaternion.slerp(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), targetDirection), 0.1);
+
+                    if (bot.shootTimer <= 0 && distanceToTarget < 250) {
+                        const aimOffset = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).multiplyScalar(15);
+                        const targetPos = bot.currentTarget.position.clone().add(new THREE.Vector3(0, 1.5, 0)).add(aimOffset);
+                        
+                        const shotRay = new THREE.Raycaster(bot.model.position, targetPos.clone().sub(bot.model.position).normalize());
+                        const shotIntersects = shotRay.intersectObjects([...shootableTargets, ...worldColliders], true);
+                        if(shotIntersects.length > 0) {
+                            let hitObject = shotIntersects[0].object; let hitPoint = shotIntersects[0].point;
+                            let hitTarget = null;
+                            let parent = hitObject;
+                            while(parent) {
+                                if(parent.uuid === bot.currentTarget.uuid) { hitTarget = bot.currentTarget; break; }
+                                parent = parent.parent;
+                            }
+
+                            if(hitTarget) {
+                                const targetIsPlayer = hitTarget.userData.isPlayer; const otherBot = aiBots.find(b => b.model === hitTarget);
+                                if(targetIsPlayer) playerHealth -= 4; else if(otherBot) otherBot.health -= bot.weapon.damage || 4;
+                                createImpactEffect(hitPoint);
+                            }
+                        }
+                        
+                        document.getElementById('player-health').innerText = `Health: ${Math.max(0, playerHealth)}`;
+                        if (playerHealth <= 0) triggerGameOver(false);
+                        bot.shootTimer = Math.random() * 2 + 2.5;
+                    }
+                }
+                bot.velocity.y += gravity * delta; bot.model.position.y += bot.velocity.y * delta;
+                if (bot.model.position.y < 0) { bot.velocity.y = 0; bot.model.position.y = 0; }
+            }
+        }
+
+        function updateStorm(delta) {
+            if (!storm) return; // Don't run if storm isn't set up
+            stormTimer -= delta;
+            
+            if (stormIsShrinking) {
+                const shrinkRate = (storm.mesh.geometry.parameters.radiusTop - storm.targetRadius) / stormShrinkTime;
+                storm.currentRadius -= shrinkRate * delta;
+                storm.mesh.geometry.dispose(); // Important for performance
+                storm.mesh.geometry = new THREE.CylinderGeometry(storm.currentRadius, storm.currentRadius, 200, 64, 1, true);
+                document.getElementById('storm-timer-ui').innerText = `Storm Shrinking!`;
+                if (stormTimer <= 0) {
+                    stormIsShrinking = false; stormPhase++;
+                    stormWaitTime = 45; stormShrinkTime = 60;
+                    stormTimer = stormWaitTime;
+                    const angle = Math.random() * 2 * Math.PI;
+                    const newRadius = storm.currentRadius * 0.6;
+                    const offset = storm.currentRadius - newRadius;
+                    storm.center.x += Math.cos(angle) * offset;
+                    storm.center.y += Math.sin(angle) * offset;
+                    storm.targetRadius = newRadius;
+                    storm.mesh.position.x = storm.center.x;
+                    storm.mesh.position.z = storm.center.y;
+                }
+            } else {
+                 document.getElementById('storm-timer-ui').innerText = `Storm shrinks in: ${Math.ceil(stormTimer)}s`;
+                if (stormTimer <= 0) {
+                    stormIsShrinking = true; stormTimer = stormShrinkTime;
+                }
+            }
+
+            const playerDist = new THREE.Vector2(player.position.x, player.position.z).distanceTo(storm.center);
+            if (playerDist > storm.currentRadius) {
+                playerHealth -= storm.damage * delta;
+                document.getElementById('player-health').innerText = `Health: ${Math.ceil(playerHealth)}`;
+                if(playerHealth <= 0) triggerGameOver(false);
+            }
+        }
+        
+        function updateMinimap() {
+            if (!gameStarted || !storm) return; // Don't draw if game hasn't started
+
+            minimapCtx.clearRect(0, 0, 200, 200);
+            
+            const scale = 200 / mapSize;
+            
+            // Draw storm
+            const stormMapRadius = storm.currentRadius * scale;
+            const stormMapX = 100 - (player.position.x - storm.center.x) * scale;
+            const stormMapY = 100 - (player.position.z - storm.center.y) * scale;
+            minimapCtx.fillStyle = 'rgba(106, 13, 173, 0.4)'; // More translucent
+            minimapCtx.beginPath();
+            minimapCtx.arc(stormMapX, stormMapY, stormMapRadius, 0, 2 * Math.PI);
+            minimapCtx.fill();
+            minimapCtx.strokeStyle = 'rgba(128, 0, 128, 1)'; // Solid purple line
+            minimapCtx.lineWidth = 3;
+            minimapCtx.stroke();
+            
+            // Draw Player
+            minimapCtx.fillStyle = 'white';
+            minimapCtx.beginPath();
+            minimapCtx.arc(100, 100, 4, 0, 2 * Math.PI);
+            minimapCtx.fill();
+
+            // Draw Bots
+            minimapCtx.fillStyle = 'red';
+            aiBots.forEach(bot => {
+                const botMapX = 100 + (bot.model.position.x - player.position.x) * scale;
+                const botMapY = 100 + (bot.model.position.z - player.position.z) * scale;
+                if(botMapX > 0 && botMapX < 200 && botMapY > 0 && botMapY < 200){
+                    minimapCtx.beginPath();
+                    minimapCtx.arc(botMapX, botMapY, 3, 0, 2 * Math.PI);
+                    minimapCtx.fill();
+                }
+            });
+        }
+        
+        function findNewAITarget(bot) {
+            let closestTarget = null; let minDistance = Infinity;
+            shootableTargets.forEach(target => {
+                if(target.uuid === bot.model.uuid) return;
+                const distance = bot.model.position.distanceTo(target.position);
+                if(distance < minDistance) { minDistance = distance; closestTarget = target; }
+            });
+            bot.currentTarget = closestTarget;
+            bot.state = 'HUNTING';
+        }
+
+        function findNearestCrate(bot) {
+            let closestCrate = null; let minDistance = Infinity;
+            if (crates.length === 0) { bot.state = 'WANDERING'; return null; }
+            crates.forEach(crate => {
+                const distance = bot.model.position.distanceTo(crate.position);
+                if (distance < minDistance) { minDistance = distance; closestCrate = crate; }
+            });
+            return closestCrate;
+        }
+
+        function triggerGameOver(isWin) {
+            gameOver = true; document.exitPointerLock();
+            const messageEl = document.getElementById('game-over-message');
+            messageEl.innerText = isWin ? "YOU WIN!" : "GAME OVER";
+            messageEl.style.color = isWin ? 'lightgreen' : 'red';
+            messageEl.style.display = 'block';
+            setTimeout(() => { location.reload(); }, 4000);
+        }
+
+        function onWindowResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+    </script>
+</body>
+</html>
